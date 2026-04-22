@@ -1,37 +1,35 @@
-import { createClient } from "redis";
+import { createClient, type RedisClientType } from "redis";
 
-const globalForRedis = globalThis as unknown as {
-  redis: ReturnType<typeof createClient>;
-};
+declare global {
+  // eslint-disable-next-line no-var
+  var _redisClient: RedisClientType | undefined;
+}
 
-function createRedisClient() {
-  const client = createClient({
-    url: process.env.REDIS_URL ?? "redis://localhost:6379",
-    socket: {
-      reconnectStrategy: (retries) => Math.min(retries * 100, 3000),
-    },
-  });
-
-  client.on("error", (err) => {
+function buildClient(): RedisClientType {
+  const url = process.env.REDIS_URL ?? "redis://localhost:6379";
+  const client = createClient({ url }) as RedisClientType;
+  client.on("error", (err: Error) => {
     if (process.env.NODE_ENV !== "test") {
-      console.error("[Redis] Connection error:", err.message);
+      console.error("[Redis] error:", err.message);
     }
   });
-
-  client.connect().catch((err) => {
-    console.error("[Redis] Failed to connect:", err.message);
-  });
-
   return client;
 }
 
-export const redis = globalForRedis.redis ?? createRedisClient();
-
-if (process.env.NODE_ENV !== "production") globalForRedis.redis = redis;
+async function getClient(): Promise<RedisClientType> {
+  if (!globalThis._redisClient) {
+    globalThis._redisClient = buildClient();
+  }
+  if (!globalThis._redisClient.isOpen) {
+    await globalThis._redisClient.connect();
+  }
+  return globalThis._redisClient;
+}
 
 export async function getCached<T>(key: string): Promise<T | null> {
   try {
-    const val = await redis.get(key);
+    const client = await getClient();
+    const val = await client.get(key);
     return val ? (JSON.parse(val) as T) : null;
   } catch {
     return null;
@@ -44,16 +42,21 @@ export async function setCached(
   ttlSeconds = 3600
 ): Promise<void> {
   try {
-    await redis.set(key, JSON.stringify(value), { EX: ttlSeconds });
+    const client = await getClient();
+    await client.set(key, JSON.stringify(value), { EX: ttlSeconds });
   } catch {
-    // non-fatal — cache miss is acceptable
+    // non-fatal
   }
 }
 
 export async function invalidate(key: string): Promise<void> {
   try {
-    await redis.del(key);
+    const client = await getClient();
+    await client.del(key);
   } catch {
     // ignore
   }
 }
+
+// For the health check
+export const redis = { ping: async () => { const c = await getClient(); return c.ping(); } };
