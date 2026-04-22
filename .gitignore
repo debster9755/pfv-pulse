@@ -40,4 +40,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-/app/generated/prisma
+# Commit the generated client but not the local macOS binary
+/app/generated/prisma/libquery_engine-darwin-arm64.dylib.node

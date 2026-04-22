@@ -1,16 +1,16 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
-  // Prevent Next.js from bundling Prisma — it must be resolved at runtime
-  // so the native query engine binary is loaded correctly by Node.js
+  // Keep Prisma out of the webpack/turbopack bundle so Node.js resolves
+  // the native query engine binary at runtime
   serverExternalPackages: ["@prisma/client", "prisma", ".prisma"],
 
-  // Include the generated Prisma client and engine binary in Lambda bundles
+  // Explicitly include the Prisma engine binary in every API Lambda bundle.
+  // Vercel's file tracer misses .node files in custom output directories.
   outputFileTracingIncludes: {
     "/api/*": [
-      "./app/generated/prisma/**",
-      "./node_modules/@prisma/client/**",
-      "./node_modules/.prisma/**",
+      path.join("app", "generated", "prisma", "**"),
     ],
   },
 };
