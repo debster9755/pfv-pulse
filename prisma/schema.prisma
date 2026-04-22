@@ -1,0 +1,149 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Product {
+  id        String   @id @default(cuid())
+  sku       String   @unique
+  name      String
+  brand     String
+  model     String
+  category  String   @default("laptop")
+  msrp      Float
+  isTarget  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  prices     Price[]
+  benchmarks Benchmark[]
+  reviews    Review[]
+  salesData  SalesData[]
+
+  @@index([brand, model])
+  @@index([sku])
+}
+
+model Price {
+  id        String      @id @default(cuid())
+  productId String
+  retailer  String
+  price     Float
+  currency  String      @default("USD")
+  inStock   Boolean     @default(true)
+  url       String?
+  scrapedAt DateTime    @default(now())
+  source    PriceSource @default(SCRAPER)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, scrapedAt])
+  @@index([productId, retailer])
+}
+
+enum PriceSource {
+  SERPAPI
+  KEEPA
+  BESTBUY
+  SCRAPER
+  CSV_IMPORT
+}
+
+model Benchmark {
+  id                 String   @id @default(cuid())
+  productId          String
+  source             String
+  cinebenchR23Multi  Float?
+  cinebenchR23Single Float?
+  geekbench6Multi    Float?
+  geekbench6Single   Float?
+  timespy            Float?
+  firestrike         Float?
+  blender            Float?
+  thermalTjMax       Float?
+  fanNoiseDb         Float?
+  batteryLifeHrs     Float?
+  aggregateScore     Float?
+  scrapedAt          DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+}
+
+model Review {
+  id             String         @id @default(cuid())
+  productId      String
+  source         String
+  url            String?
+  reviewerName   String?
+  rating         Float?
+  title          String?
+  body           String?        @db.Text
+  sentimentScore Float?
+  sentimentLabel SentimentLabel?
+  positiveCount  Int            @default(0)
+  negativeCount  Int            @default(0)
+  publishedAt    DateTime?
+  scrapedAt      DateTime       @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, scrapedAt])
+  @@index([productId, source])
+}
+
+enum SentimentLabel {
+  POSITIVE
+  NEGATIVE
+  NEUTRAL
+}
+
+model SalesData {
+  id              String   @id @default(cuid())
+  productId       String
+  retailer        String?
+  weekStartDate   DateTime
+  unitsSold       Int
+  revenue         Float?
+  avgSellingPrice Float?
+  returnRate      Float?
+  source          String   @default("csv_import")
+  importedAt      DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, retailer, weekStartDate])
+  @@index([productId, weekStartDate])
+}
+
+model ScraperRun {
+  id              String        @id @default(cuid())
+  target          String
+  status          ScraperStatus
+  productsUpdated Int           @default(0)
+  errorMessage    String?
+  startedAt       DateTime      @default(now())
+  completedAt     DateTime?
+}
+
+enum ScraperStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  PARTIAL
+}
+
+model CronLog {
+  id         String   @id @default(cuid())
+  jobName    String
+  status     String
+  details    Json?
+  executedAt DateTime @default(now())
+}
