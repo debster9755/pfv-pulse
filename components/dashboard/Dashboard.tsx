@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Search, RefreshCw, Activity } from "lucide-react";
 import { ChatInterface } from "./ChatInterface";
 import { PriceHistoryChart } from "./PriceHistoryChart";
@@ -41,6 +41,7 @@ export function Dashboard() {
   const [searchQuery, setSearchQuery] = useState("");
   const [loadingAnalytics, setLoadingAnalytics] = useState(false);
   const [scraping, setScraping] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchProducts = useCallback(async (q = "") => {
     const res = await fetch(`/api/products${q ? `?q=${encodeURIComponent(q)}` : ""}`);
@@ -48,26 +49,47 @@ export function Dashboard() {
     setProducts(data.products ?? []);
   }, []);
 
-  const fetchAnalytics = useCallback(async (id: string) => {
-    setLoadingAnalytics(true);
+  const fetchAnalytics = useCallback(async (id: string, silent = false) => {
+    if (!silent) setLoadingAnalytics(true);
     try {
       const [analyticsRes, pricesRes] = await Promise.all([
         fetch(`/api/analytics?targetId=${id}`),
         fetch(`/api/prices?productId=${id}&days=30`),
       ]);
-      setAnalytics(await analyticsRes.json());
+      if (analyticsRes.ok) setAnalytics(await analyticsRes.json());
       const pricesData = await pricesRes.json();
       setPrices(pricesData.prices ?? []);
     } finally {
-      setLoadingAnalytics(false);
+      if (!silent) setLoadingAnalytics(false);
     }
   }, []);
+
+  // Auto-poll every 6s after product selection to catch async enrichment
+  const startPolling = useCallback((id: string) => {
+    if (pollRef.current) clearInterval(pollRef.current);
+    let ticks = 0;
+    pollRef.current = setInterval(() => {
+      ticks++;
+      fetchAnalytics(id, true);
+      fetchProducts();
+      if (ticks >= 10) {
+        clearInterval(pollRef.current!);
+        pollRef.current = null;
+      }
+    }, 6000);
+  }, [fetchAnalytics, fetchProducts]);
 
   useEffect(() => { fetchProducts(); }, [fetchProducts]);
 
   useEffect(() => {
-    if (selectedId) fetchAnalytics(selectedId);
-  }, [selectedId, fetchAnalytics]);
+    if (selectedId) {
+      fetchAnalytics(selectedId);
+      startPolling(selectedId);
+    }
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [selectedId, fetchAnalytics, startPolling]);
 
   async function triggerScrape() {
     if (!selectedId || scraping) return;
@@ -77,15 +99,10 @@ export function Dashboard() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ productId: selectedId, type: "full" }),
     });
-    // Poll for completion
-    let attempts = 0;
-    const poll = setInterval(async () => {
-      attempts++;
-      if (attempts > 30) { clearInterval(poll); setScraping(false); return; }
-      await fetchAnalytics(selectedId);
+    setTimeout(() => {
+      fetchAnalytics(selectedId);
       setScraping(false);
-      clearInterval(poll);
-    }, 4000);
+    }, 5000);
   }
 
   const targetProduct = products.find((p) => p.id === selectedId);
@@ -134,35 +151,37 @@ export function Dashboard() {
       </header>
 
       <main className="mx-auto max-w-7xl px-6 py-6 space-y-6">
-        {/* Product selector */}
-        <div className="flex gap-2 flex-wrap">
-          {products.filter((p) => p.isTarget).map((p) => (
-            <button
-              key={p.id}
-              onClick={() => setSelectedId(p.id)}
-              className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
-                selectedId === p.id
-                  ? "border-blue-600 bg-blue-600 text-white"
-                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
-              }`}
-            >
-              {p.name}
-            </button>
-          ))}
-        </div>
+        {/* Target product selector */}
+        {products.filter((p) => p.isTarget).length > 0 && (
+          <div className="flex gap-2 flex-wrap">
+            {products.filter((p) => p.isTarget).map((p) => (
+              <button
+                key={p.id}
+                onClick={() => setSelectedId(p.id)}
+                className={`rounded-lg border px-4 py-2 text-sm font-medium transition-colors ${
+                  selectedId === p.id
+                    ? "border-blue-600 bg-blue-600 text-white"
+                    : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+                }`}
+              >
+                {p.name}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Chat + CSV upload row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <ChatInterface
             onProductAdded={(id) => {
-              fetchProducts();
               setSelectedId(id);
+              fetchProducts();
             }}
           />
           <CsvUploader />
         </div>
 
-        {/* Analytics section */}
+        {/* Analytics loading */}
         {loadingAnalytics && (
           <div className="flex h-40 items-center justify-center">
             <div className="flex flex-col items-center gap-3 text-gray-500">
@@ -174,10 +193,8 @@ export function Dashboard() {
 
         {analytics && !loadingAnalytics && (
           <>
-            {/* Recommendation — most prominent */}
             <RecommendationCard recommendation={analytics.recommendation as Parameters<typeof RecommendationCard>[0]["recommendation"]} />
 
-            {/* Charts row */}
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               <PriceHistoryChart
                 prices={prices}
@@ -189,7 +206,6 @@ export function Dashboard() {
               />
             </div>
 
-            {/* Delta table + sentiment */}
             <DeltaTable
               deltas={analytics.deltas as Parameters<typeof DeltaTable>[0]["deltas"]}
               targetName={targetProduct?.name ?? ""}
@@ -204,8 +220,9 @@ export function Dashboard() {
         {!selectedId && !loadingAnalytics && (
           <div className="flex h-60 flex-col items-center justify-center gap-3 rounded-xl border-2 border-dashed border-gray-200 bg-white text-gray-400">
             <Activity className="h-10 w-10" />
-            <p className="text-sm font-medium">
-              Use the chat above to start tracking a product, or select one from the list.
+            <p className="text-sm font-medium text-center">
+              Use the chat above to start tracking a product.<br />
+              Try: <span className="font-semibold text-gray-600">&ldquo;Track HP Omen 16 against Lenovo Legion 5&rdquo;</span>
             </p>
           </div>
         )}

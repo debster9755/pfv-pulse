@@ -72,35 +72,28 @@ export function ChatInterface({ onProductAdded }: ChatInterfaceProps) {
         const data = await res.json();
         const productId = data.product?.id;
 
-        // Create competitor products
-        for (const name of competitors) {
-          await fetch("/api/products", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              name,
-              brand: name.split(" ")[0],
-              sku: `sku-comp-${Date.now()}-${Math.random()}`,
-              msrp: 0,
-              isTarget: false,
-            }),
-          });
-        }
-
-        // Trigger scrape for target
-        if (productId) {
-          await fetch("/api/scrape", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ productId, type: "full" }),
-          });
-        }
+        // Create all competitors in parallel — don't await sequentially
+        await Promise.allSettled(
+          competitors.map((name, i) =>
+            fetch("/api/products", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name,
+                brand: name.split(" ")[0],
+                sku: `sku-comp-${i}-${targetName.replace(/\s/g, "").toLowerCase()}`,
+                msrp: 0,
+                isTarget: false,
+              }),
+            })
+          )
+        );
 
         const competitorMsg = competitors.length
           ? ` Competitors tracked: ${competitors.join(", ")}.`
           : "";
         return {
-          message: `Tracking **${targetName}** — scraping prices, benchmarks, and reviews now.${competitorMsg} The dashboard will update shortly.`,
+          message: `Tracking **${targetName}** — prices loading now.${competitorMsg} The dashboard will populate below.`,
           productId,
         };
       }

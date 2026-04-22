@@ -57,50 +57,57 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // kick off price enrichment from external APIs
-    try {
-      const [serpData, bbData] = await Promise.allSettled([
-        getShoppingPrices(name),
-        getBestBuyPrices(name),
-      ]);
-
-      const priceRecords = [];
-
-      if (serpData.status === "fulfilled") {
-        for (const r of serpData.value.results.slice(0, 5)) {
-          priceRecords.push({
-            productId: product.id,
-            retailer: r.retailer,
-            price: r.price,
-            url: r.link,
-            source: "SERPAPI" as const,
-          });
-        }
-      }
-
-      if (bbData.status === "fulfilled") {
-        for (const p of bbData.value.products.slice(0, 3)) {
-          priceRecords.push({
-            productId: product.id,
-            retailer: "Best Buy",
-            price: p.salePrice || p.regularPrice,
-            inStock: p.onlineAvailability,
-            url: p.url,
-            source: "BESTBUY" as const,
-          });
-        }
-      }
-
-      if (priceRecords.length > 0) {
-        await prisma.price.createMany({ data: priceRecords });
-      }
-    } catch {
-      // enrichment failure is non-fatal
-    }
+    // Fire-and-forget enrichment — respond immediately, don't block on APIs
+    enrichProductPrices(product.id, name).catch(() => {});
 
     return Response.json({ product }, { status: 201 });
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });
+  }
+}
+
+async function enrichProductPrices(productId: string, name: string) {
+  const [serpData, bbData] = await Promise.allSettled([
+    getShoppingPrices(name),
+    getBestBuyPrices(name),
+  ]);
+
+  const priceRecords: Array<{
+    productId: string;
+    retailer: string;
+    price: number;
+    inStock?: boolean;
+    url?: string;
+    source: "SERPAPI" | "BESTBUY";
+  }> = [];
+
+  if (serpData.status === "fulfilled") {
+    for (const r of serpData.value.results.slice(0, 5)) {
+      priceRecords.push({
+        productId,
+        retailer: r.retailer,
+        price: r.price,
+        url: r.link,
+        source: "SERPAPI",
+      });
+    }
+  }
+
+  if (bbData.status === "fulfilled") {
+    for (const p of bbData.value.products.slice(0, 3)) {
+      priceRecords.push({
+        productId,
+        retailer: "Best Buy",
+        price: p.salePrice || p.regularPrice,
+        inStock: p.onlineAvailability,
+        url: p.url,
+        source: "BESTBUY",
+      });
+    }
+  }
+
+  if (priceRecords.length > 0) {
+    await prisma.price.createMany({ data: priceRecords, skipDuplicates: true });
   }
 }
