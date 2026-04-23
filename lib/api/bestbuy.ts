@@ -1,5 +1,5 @@
-import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 import { withTimeout } from "@/lib/timeout";
+import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 
 export interface BestBuyProduct {
   sku: string;
@@ -69,9 +69,10 @@ async function fetchFromApi(query: string, pageSize: number): Promise<BestBuyPro
     show: SHOW_FIELDS,
     apiKey: process.env.BESTBUY_API_KEY!,
   });
-  // Encode & as %26 so WHATWG URL parsers don't split the OData filter at the &
+  // %26 encodes & so WHATWG URL parsers don't split the OData filter
   const filter = `search=${encodeURIComponent(searchTerm)}%26categoryPath.id=${LAPTOP_CATEGORY_ID}`;
   const url = `${BASE_URL}/products(${filter})?${qs.toString()}`;
+
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return [];
   const data: BestBuyApiResponse = await res.json();
@@ -85,27 +86,31 @@ export async function searchBestBuyProducts(
 ): Promise<BestBuyProduct[]> {
   if (!isConfigured()) return [];
 
-  const cacheKey = `bestbuy:v4:${query}:${pageSize}`;
-
-  // Race cache vs live API — concurrent, not sequential
-  const [cacheResult, apiResult] = await Promise.allSettled([
-    withTimeout(cacheGetJson<BestBuyProduct[]>(cacheKey), 1000, null),
-    withTimeout(fetchFromApi(query, pageSize), API_TIMEOUT_MS, []),
-  ]);
-
-  const cached = cacheResult.status === "fulfilled" ? cacheResult.value : null;
-  if (cached) return cached;
-
-  const fresh = apiResult.status === "fulfilled" ? apiResult.value : [];
-  if (fresh.length > 0) {
-    cacheSetJson(cacheKey, fresh, CACHE_TTL).catch(() => {});
+  // Check cache first — non-blocking 800ms max
+  const cacheKey = `bestbuy:v5:${query}:${pageSize}`;
+  try {
+    const cached = await withTimeout(
+      cacheGetJson<BestBuyProduct[]>(cacheKey),
+      800,
+      null
+    );
+    if (cached && cached.length > 0) return cached;
+  } catch {
+    // cache unavailable — proceed to live fetch
   }
-  return fresh;
+
+  // Live API fetch with hard timeout
+  const products = await withTimeout(fetchFromApi(query, pageSize), API_TIMEOUT_MS, []);
+
+  // Write to cache in background — never await this
+  if (products.length > 0) {
+    cacheSetJson(cacheKey, products, CACHE_TTL).catch(() => {});
+  }
+  return products;
 }
 
 export async function getBestBuyProductBySku(sku: string): Promise<BestBuyProduct | null> {
   if (!isConfigured()) return null;
-
   const fetch$ = async () => {
     const url = `${BASE_URL}/products/${sku}.json?show=${SHOW_FIELDS}&apiKey=${process.env.BESTBUY_API_KEY}`;
     const res = await fetch(url, { cache: "no-store" });
@@ -113,6 +118,5 @@ export async function getBestBuyProductBySku(sku: string): Promise<BestBuyProduc
     const p: BestBuyApiProduct = await res.json();
     return mapProduct(p);
   };
-
   return withTimeout(fetch$(), API_TIMEOUT_MS, null);
 }

@@ -1,5 +1,5 @@
-import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 import { withTimeout } from "@/lib/timeout";
+import { cacheGetJson, cacheSetJson } from "@/lib/redis";
 
 export interface ShoppingResult {
   title: string;
@@ -31,7 +31,6 @@ interface SerpApiResponse {
 
 const CACHE_TTL = 3600;
 const API_TIMEOUT_MS = 8000;
-
 const EMPTY: PriceSummary = { results: [], low: null, high: null, average: null };
 
 function isConfigured(): boolean {
@@ -83,21 +82,24 @@ async function fetchFromApi(query: string): Promise<PriceSummary> {
 export async function getShoppingPrices(query: string): Promise<PriceSummary> {
   if (!isConfigured()) return EMPTY;
 
-  const cacheKey = `serpapi:v3:${query}`;
-
-  // Race cache lookup against live API call — whichever arrives first wins
-  const [cacheResult, apiResult] = await Promise.allSettled([
-    withTimeout(cacheGetJson<PriceSummary>(cacheKey), 1000, null),
-    withTimeout(fetchFromApi(query), API_TIMEOUT_MS, EMPTY),
-  ]);
-
-  const cached = cacheResult.status === "fulfilled" ? cacheResult.value : null;
-  if (cached) return cached;
-
-  const fresh = apiResult.status === "fulfilled" ? apiResult.value : EMPTY;
-  if (fresh.results.length > 0) {
-    // Fire-and-forget cache write — don't await
-    cacheSetJson(cacheKey, fresh, CACHE_TTL).catch(() => {});
+  // Check cache first — non-blocking 800ms max
+  const cacheKey = `serpapi:v4:${query}`;
+  try {
+    const cached = await withTimeout(
+      cacheGetJson<PriceSummary>(cacheKey),
+      800,
+      null
+    );
+    if (cached && cached.results.length > 0) return cached;
+  } catch {
+    // proceed to live fetch
   }
-  return fresh;
+
+  // Live API fetch with hard timeout
+  const result = await withTimeout(fetchFromApi(query), API_TIMEOUT_MS, EMPTY);
+
+  if (result.results.length > 0) {
+    cacheSetJson(cacheKey, result, CACHE_TTL).catch(() => {});
+  }
+  return result;
 }
