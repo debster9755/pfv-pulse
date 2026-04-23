@@ -2,10 +2,16 @@ import { createClient } from "redis";
 
 let client: ReturnType<typeof createClient> | null = null;
 
+function getRedisUrl(): string | null {
+  // Support both variable names (prior deployment used REDIS_URL)
+  return process.env.UPSTASH_REDIS_URL ?? process.env.REDIS_URL ?? null;
+}
+
 async function getRedisClient() {
-  if (!process.env.UPSTASH_REDIS_URL) return null;
+  const url = getRedisUrl();
+  if (!url) return null;
   if (!client) {
-    client = createClient({ url: process.env.UPSTASH_REDIS_URL });
+    client = createClient({ url, socket: { connectTimeout: 3000 } });
     client.on("error", () => {
       client = null;
     });

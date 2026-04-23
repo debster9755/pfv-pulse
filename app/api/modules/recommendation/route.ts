@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+
+export const maxDuration = 25;
+
 import { getShoppingPrices } from "@/lib/api/serpapi";
 import { fetchAggregatedReviews } from "@/lib/modules/reviews";
 import { analyzeReviewSentiment } from "@/lib/modules/sentiment";

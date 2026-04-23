@@ -22,7 +22,7 @@ export async function fetchAggregatedReviews(
   try {
     const res = await fetch(
       `${SCRAPER_BASE}/scrape/reviews?product=${encodeURIComponent(productName)}`,
-      { signal: AbortSignal.timeout(15000) }
+      { signal: AbortSignal.timeout(5000) }
     );
     if (!res.ok) return [];
     const data: ReviewEntry[] = await res.json();

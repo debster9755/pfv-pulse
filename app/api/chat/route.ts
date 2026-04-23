@@ -3,6 +3,8 @@ import { parseIntent } from "@/lib/intent/router";
 import { searchBestBuyProducts } from "@/lib/api/bestbuy";
 import { getShoppingPrices } from "@/lib/api/serpapi";
 
+export const maxDuration = 25;
+
 export async function POST(req: NextRequest) {
   try {
     const { message } = await req.json();
@@ -40,19 +42,27 @@ export async function POST(req: NextRequest) {
         url: p.url,
       }));
 
+      const dataAvailable = chartData.length > 0 || serpData.results.length > 0;
+
+      if (!dataAvailable) {
+        return NextResponse.json({
+          type: "clarification",
+          message:
+            `I searched for **${query}** but couldn't retrieve live pricing right now.\n\nThis could be due to API rate limits or a temporary service issue. Try:\n- A more specific product name (e.g. *"HP Omen 16"*)\n- Checking back in a moment`,
+        });
+      }
+
       return NextResponse.json({
         type: "single_product",
         intent,
         chart: chartData,
         serpSummary: serpData,
-        dataAvailable: chartData.length > 0 || serpData.results.length > 0,
+        dataAvailable,
       });
     }
 
     if (intent.type === "comparison") {
-      const targets = [
-        ...intent.products.length ? intent.products : intent.brands,
-      ];
+      const targets = intent.products.length ? intent.products : intent.brands;
 
       const priceResults = await Promise.allSettled(
         targets.map((t) => getShoppingPrices(t))
@@ -66,9 +76,7 @@ export async function POST(req: NextRequest) {
         return { brand: target, average: summary.average, low: summary.low, high: summary.high };
       });
 
-      const hpRow = rows.find((r) =>
-        r.brand.toLowerCase().includes("hp")
-      );
+      const hpRow = rows.find((r) => /\bhp\b/i.test(r.brand));
       const hpAvg = hpRow?.average ?? null;
 
       const tableData = rows.map((r) => ({

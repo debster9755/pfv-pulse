@@ -29,6 +29,7 @@ interface SerpApiResponse {
 }
 
 const CACHE_TTL = 3600;
+const FETCH_TIMEOUT_MS = 7000;
 
 function isConfigured(): boolean {
   return Boolean(process.env.SERPAPI_KEY);
@@ -39,21 +40,6 @@ function parsePrice(raw?: string): number | null {
   const cleaned = raw.replace(/[^0-9.]/g, "");
   const parsed = parseFloat(cleaned);
   return isNaN(parsed) ? null : parsed;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-let lastCallAt = 0;
-const RATE_LIMIT_MS = 1200;
-
-async function throttledFetch(url: string): Promise<Response> {
-  const now = Date.now();
-  const wait = RATE_LIMIT_MS - (now - lastCallAt);
-  if (wait > 0) await sleep(wait);
-  lastCallAt = Date.now();
-  return fetch(url, { next: { revalidate: 0 } });
 }
 
 export async function getShoppingPrices(query: string): Promise<PriceSummary> {
@@ -69,10 +55,14 @@ export async function getShoppingPrices(query: string): Promise<PriceSummary> {
       engine: "google_shopping",
       q: query,
       api_key: process.env.SERPAPI_KEY!,
-      num: "20",
+      num: "10",
     });
-    const res = await throttledFetch(
-      `https://serpapi.com/search.json?${params.toString()}`
+    const res = await fetch(
+      `https://serpapi.com/search.json?${params.toString()}`,
+      {
+        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+        cache: "no-store",
+      }
     );
     if (!res.ok) return empty;
     const data: SerpApiResponse = await res.json();

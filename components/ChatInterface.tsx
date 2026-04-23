@@ -68,7 +68,11 @@ export default function ChatInterface({ onHistoryQuery, onRecommendationRequest 
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: userText }),
+        signal: AbortSignal.timeout(22000),
       });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
       const data: ApiChatResponse = await res.json();
 
       let assistantMsg: ChatMessage;
@@ -131,14 +135,17 @@ export default function ChatInterface({ onHistoryQuery, onRecommendationRequest 
       }
 
       setMessages((prev) => [...prev, assistantMsg]);
-    } catch {
+    } catch (err) {
+      const isTimeout = err instanceof Error && err.name === "TimeoutError";
       setMessages((prev) => [
         ...prev,
         {
           id: generateId(),
           role: "assistant",
           type: "error",
-          content: "Network error. Please check your connection and try again.",
+          content: isTimeout
+            ? "The request took too long — the pricing APIs may be rate-limited. Please try again in a moment."
+            : "Something went wrong fetching pricing data. Please try again.",
         },
       ]);
     } finally {

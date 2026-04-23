@@ -53,7 +53,10 @@ export async function searchBestBuyProducts(
   try {
     const encoded = encodeURIComponent(query);
     const url = `${BASE_URL}/products(search=${encoded})?format=json&pageSize=${pageSize}&show=sku,name,regularPrice,salePrice,onSale,inStoreAvailability,onlineAvailability,url,image,brand,modelNumber&apiKey=${process.env.BESTBUY_API_KEY}`;
-    const res = await fetch(url, { next: { revalidate: 0 } });
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(7000),
+      cache: "no-store",
+    });
     if (!res.ok) return [];
     const data: BestBuyApiResponse = await res.json();
     const products: BestBuyProduct[] = (data.products ?? []).map((p) => ({
