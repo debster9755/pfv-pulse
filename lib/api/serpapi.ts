@@ -1,4 +1,5 @@
 import { cacheGetJson, cacheSetJson } from "@/lib/redis";
+import { withTimeout } from "@/lib/timeout";
 
 export interface ShoppingResult {
   title: string;
@@ -29,7 +30,9 @@ interface SerpApiResponse {
 }
 
 const CACHE_TTL = 3600;
-const FETCH_TIMEOUT_MS = 7000;
+const FETCH_TIMEOUT_MS = 6000;
+
+const EMPTY: PriceSummary = { results: [], low: null, high: null, average: null };
 
 function isConfigured(): boolean {
   return Boolean(process.env.SERPAPI_KEY);
@@ -42,52 +45,57 @@ function parsePrice(raw?: string): number | null {
   return isNaN(parsed) ? null : parsed;
 }
 
-export async function getShoppingPrices(query: string): Promise<PriceSummary> {
-  const empty: PriceSummary = { results: [], low: null, high: null, average: null };
-  if (!isConfigured()) return empty;
+async function doFetch(query: string): Promise<PriceSummary> {
+  const params = new URLSearchParams({
+    engine: "google_shopping",
+    q: query,
+    api_key: process.env.SERPAPI_KEY!,
+    num: "10",
+    gl: "us",
+    hl: "en",
+  });
 
-  const cacheKey = `serpapi:shopping:${query}`;
+  const res = await fetch(
+    `https://serpapi.com/search.json?${params.toString()}`,
+    { cache: "no-store" }
+  );
+  if (!res.ok) return EMPTY;
+  const data: SerpApiResponse = await res.json();
+  if (data.error) return EMPTY;
+
+  const results: ShoppingResult[] = (data.shopping_results ?? []).map((r) => ({
+    title: r.title,
+    price: parsePrice(r.price),
+    source: r.source,
+    link: r.link ?? null,
+    thumbnail: r.thumbnail ?? null,
+  }));
+
+  const prices = results
+    .map((r) => r.price)
+    .filter((p): p is number => p !== null);
+
+  return {
+    results,
+    low: prices.length ? Math.min(...prices) : null,
+    high: prices.length ? Math.max(...prices) : null,
+    average: prices.length
+      ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100
+      : null,
+  };
+}
+
+export async function getShoppingPrices(query: string): Promise<PriceSummary> {
+  if (!isConfigured()) return EMPTY;
+
+  const cacheKey = `serpapi:v2:${query}`;
   const cached = await cacheGetJson<PriceSummary>(cacheKey);
   if (cached) return cached;
 
-  try {
-    const params = new URLSearchParams({
-      engine: "google_shopping",
-      q: query,
-      api_key: process.env.SERPAPI_KEY!,
-      num: "10",
-    });
-    const res = await fetch(
-      `https://serpapi.com/search.json?${params.toString()}`,
-      {
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-        cache: "no-store",
-      }
-    );
-    if (!res.ok) return empty;
-    const data: SerpApiResponse = await res.json();
-    if (data.error) return empty;
+  const result = await withTimeout(doFetch(query), FETCH_TIMEOUT_MS, EMPTY);
 
-    const results: ShoppingResult[] = (data.shopping_results ?? []).map((r) => ({
-      title: r.title,
-      price: parsePrice(r.price),
-      source: r.source,
-      link: r.link ?? null,
-      thumbnail: r.thumbnail ?? null,
-    }));
-
-    const prices = results.map((r) => r.price).filter((p): p is number => p !== null);
-    const summary: PriceSummary = {
-      results,
-      low: prices.length ? Math.min(...prices) : null,
-      high: prices.length ? Math.max(...prices) : null,
-      average: prices.length
-        ? Math.round((prices.reduce((a, b) => a + b, 0) / prices.length) * 100) / 100
-        : null,
-    };
-    await cacheSetJson(cacheKey, summary, CACHE_TTL);
-    return summary;
-  } catch {
-    return empty;
+  if (result.results.length > 0) {
+    await cacheSetJson(cacheKey, result, CACHE_TTL);
   }
+  return result;
 }

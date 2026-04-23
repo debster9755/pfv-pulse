@@ -3,7 +3,8 @@ import { parseIntent } from "@/lib/intent/router";
 import { searchBestBuyProducts } from "@/lib/api/bestbuy";
 import { getShoppingPrices } from "@/lib/api/serpapi";
 
-export const maxDuration = 25;
+// Stay within Vercel hobby tier 10s limit
+export const maxDuration = 10;
 
 export async function POST(req: NextRequest) {
   try {
@@ -14,6 +15,7 @@ export async function POST(req: NextRequest) {
 
     const intent = parseIntent(message);
 
+    // Intent parsing is instant — return clarifications immediately
     if (intent.type === "clarification_needed") {
       return NextResponse.json({
         type: "clarification",
@@ -21,19 +23,37 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    if (intent.type === "price_history") {
+      const query = intent.products[0] ?? intent.brands[0] ?? message;
+      return NextResponse.json({
+        type: "redirect",
+        message: `Showing 30-day price history for **${query}**.`,
+        historyQuery: query,
+      });
+    }
+
+    if (intent.type === "recommendation") {
+      return NextResponse.json({
+        type: "redirect",
+        message: "Opening the Revenue-Boost Recommendation Engine…",
+        redirectTo: "recommendation",
+      });
+    }
+
+    if (intent.type === "unknown") {
+      return NextResponse.json({
+        type: "clarification",
+        message:
+          "I'm not sure what you're looking for. Try:\n- *\"Give me HP Omen laptop pricing options\"*\n- *\"Compare HP Omen vs Lenovo Legion vs Asus ROG\"*\n- *\"Show price history for HP Omen 16\"*",
+      });
+    }
+
+    // ── single_product: Best Buy only (fast, ~1-3s) ──────────────────────────
     if (intent.type === "single_product") {
       const query = intent.products[0] ?? intent.brands[0] ?? message;
-      const [bbResults, serpResults] = await Promise.allSettled([
-        searchBestBuyProducts(query, 8),
-        getShoppingPrices(query),
-      ]);
 
-      const bbData = bbResults.status === "fulfilled" ? bbResults.value : [];
-      const serpData =
-        serpResults.status === "fulfilled"
-          ? serpResults.value
-          : { results: [], low: null, high: null, average: null };
-
+      const bbData = await searchBestBuyProducts(query, 8);
+      // SerpApi market context is fetched client-side via /api/prices separately
       const chartData = bbData.map((p) => ({
         name: p.name.length > 40 ? p.name.slice(0, 37) + "…" : p.name,
         regularPrice: p.regularPrice,
@@ -42,25 +62,17 @@ export async function POST(req: NextRequest) {
         url: p.url,
       }));
 
-      const dataAvailable = chartData.length > 0 || serpData.results.length > 0;
-
-      if (!dataAvailable) {
-        return NextResponse.json({
-          type: "clarification",
-          message:
-            `I searched for **${query}** but couldn't retrieve live pricing right now.\n\nThis could be due to API rate limits or a temporary service issue. Try:\n- A more specific product name (e.g. *"HP Omen 16"*)\n- Checking back in a moment`,
-        });
-      }
-
       return NextResponse.json({
         type: "single_product",
         intent,
         chart: chartData,
-        serpSummary: serpData,
-        dataAvailable,
+        serpSummary: null,   // client fetches this separately from /api/prices
+        dataAvailable: chartData.length > 0,
+        query,
       });
     }
 
+    // ── comparison: SerpApi × N brands in parallel ────────────────────────────
     if (intent.type === "comparison") {
       const targets = intent.products.length ? intent.products : intent.brands;
 
@@ -95,27 +107,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (intent.type === "price_history") {
-      const query = intent.products[0] ?? intent.brands[0] ?? message;
-      return NextResponse.json({
-        type: "redirect",
-        message: `Showing 30-day price history for **${query}**.`,
-        historyQuery: query,
-      });
-    }
-
-    if (intent.type === "recommendation") {
-      return NextResponse.json({
-        type: "redirect",
-        message: "Loading the Revenue-Boost Recommendation Engine…",
-        redirectTo: "recommendation",
-      });
-    }
-
     return NextResponse.json({
       type: "clarification",
-      message:
-        "I'm not sure what you're looking for. Try:\n- *\"Give me HP Omen laptop pricing options\"*\n- *\"Compare HP Omen vs Lenovo Legion vs Asus ROG\"*\n- *\"Show price history for HP Omen 16\"*",
+      message: "Could you be more specific? Try asking for HP Omen pricing options or a comparison between brands.",
     });
   } catch {
     return NextResponse.json(

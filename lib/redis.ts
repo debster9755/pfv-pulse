@@ -1,34 +1,47 @@
 import { createClient } from "redis";
+import { withTimeout } from "./timeout";
+
+const CONNECT_TIMEOUT_MS = 1500;
+const OP_TIMEOUT_MS = 800;
 
 let client: ReturnType<typeof createClient> | null = null;
+let connecting = false;
 
 function getRedisUrl(): string | null {
-  // Support both variable names (prior deployment used REDIS_URL)
   return process.env.UPSTASH_REDIS_URL ?? process.env.REDIS_URL ?? null;
 }
 
 async function getRedisClient() {
   const url = getRedisUrl();
   if (!url) return null;
-  if (!client) {
-    client = createClient({ url, socket: { connectTimeout: 3000 } });
-    client.on("error", () => {
-      client = null;
-    });
-    try {
-      await client.connect();
-    } catch {
-      client = null;
+  if (client?.isReady) return client;
+  if (connecting) return null; // don't stack connections in cold-start
+
+  connecting = true;
+  try {
+    const c = createClient({ url, socket: { connectTimeout: CONNECT_TIMEOUT_MS } });
+    c.on("error", () => { client = null; connecting = false; });
+
+    const connected = await withTimeout(c.connect(), CONNECT_TIMEOUT_MS, false as unknown as typeof c);
+    // withTimeout resolves false on timeout — check if we got a real client back
+    if (connected && typeof (connected as typeof c).get === "function") {
+      client = connected as typeof c;
+      connecting = false;
+      return client;
     }
+    connecting = false;
+    return null;
+  } catch {
+    connecting = false;
+    return null;
   }
-  return client;
 }
 
 export async function cacheGet(key: string): Promise<string | null> {
   try {
     const redis = await getRedisClient();
     if (!redis) return null;
-    return await redis.get(key);
+    return await withTimeout(redis.get(key), OP_TIMEOUT_MS, null);
   } catch {
     return null;
   }
@@ -42,9 +55,9 @@ export async function cacheSet(
   try {
     const redis = await getRedisClient();
     if (!redis) return;
-    await redis.set(key, value, { EX: ttlSeconds });
+    await withTimeout(redis.set(key, value, { EX: ttlSeconds }), OP_TIMEOUT_MS, null);
   } catch {
-    // cache unavailable is non-fatal
+    // non-fatal
   }
 }
 

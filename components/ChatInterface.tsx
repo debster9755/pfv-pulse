@@ -18,6 +18,7 @@ interface ApiChatResponse {
   dataAvailable?: boolean;
   historyQuery?: string;
   redirectTo?: string;
+  query?: string;
 }
 
 function generateId() {
@@ -87,16 +88,46 @@ export default function ChatInterface({ onHistoryQuery, onRecommendationRequest 
       } else if (data.type === "single_product") {
         const chart = data.chart ?? [];
         const hasData = data.dataAvailable && chart.length > 0;
+        const msgId = generateId();
         assistantMsg = {
-          id: generateId(),
+          id: msgId,
           role: "assistant",
           type: hasData ? "chart" : "text",
           content: hasData
-            ? `Found **${chart.length} products** from Best Buy matching your query.`
-            : "No pricing data was available from Best Buy for that query. Try enabling the Scraper or checking your API key.",
+            ? `Found **${chart.length} products** from Best Buy. Fetching market pricing…`
+            : "No pricing data found from Best Buy. The API key may be invalid or the product name too broad — try *\"HP Omen 16\"* for a more specific query.",
           chartData: chart,
-          serpSummary: data.serpSummary,
+          serpSummary: undefined,
         };
+        // Fetch SerpApi market context in background — update the message when ready
+        if (hasData && data.query) {
+          fetch(`/api/prices?q=${encodeURIComponent(data.query)}`)
+            .then((r) => r.json())
+            .then((priceData) => {
+              if (priceData?.serp?.average != null) {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === msgId
+                      ? {
+                          ...m,
+                          content: `Found **${chart.length} products** from Best Buy. Market avg: **$${priceData.serp.average}** across ${priceData.serp.results?.length ?? 0} retailers.`,
+                          serpSummary: priceData.serp,
+                        }
+                      : m
+                  )
+                );
+              } else {
+                setMessages((prev) =>
+                  prev.map((m) =>
+                    m.id === msgId
+                      ? { ...m, content: `Found **${chart.length} products** from Best Buy.` }
+                      : m
+                  )
+                );
+              }
+            })
+            .catch(() => {/* non-fatal */});
+        }
       } else if (data.type === "comparison") {
         const table = data.table ?? data.tableData ?? [];
         const hasData = data.dataAvailable && table.length > 0;
