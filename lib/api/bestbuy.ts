@@ -25,18 +25,25 @@ interface BestBuyApiProduct {
   onlineAvailability: boolean;
   url: string;
   image: string;
-  brand: string;
+  manufacturer: string; // Best Buy uses "manufacturer" not "brand"
   modelNumber: string;
 }
 
 interface BestBuyApiResponse {
   products?: BestBuyApiProduct[];
   total?: number;
+  error?: { message: string };
 }
 
 const BASE_URL = "https://api.bestbuy.com/v1";
 const CACHE_TTL = 1800;
 const FETCH_TIMEOUT_MS = 6000;
+
+// Best Buy laptop category ID — narrows results to Laptop & Netbooks
+const LAPTOP_CATEGORY_ID = "abcat0502000";
+
+const SHOW_FIELDS =
+  "sku,name,regularPrice,salePrice,manufacturer,modelNumber,onSale,inStoreAvailability,onlineAvailability,url,image";
 
 function isConfigured(): boolean {
   return Boolean(process.env.BESTBUY_API_KEY);
@@ -53,26 +60,28 @@ function mapProduct(p: BestBuyApiProduct): BestBuyProduct {
     onlineAvailability: p.onlineAvailability,
     url: p.url ?? null,
     image: p.image ?? null,
-    brand: p.brand,
-    modelNumber: p.modelNumber,
+    brand: p.manufacturer ?? "",
+    modelNumber: p.modelNumber ?? "",
   };
 }
 
 async function doSearch(query: string, pageSize: number): Promise<BestBuyProduct[]> {
-  // Best Buy OData search: parentheses must NOT have URL-encoded content inside
-  // Correct format: /products(search=hp omen) — spaces encoded as %20
-  const searchTerm = query.replace(/[()]/g, "").trim();
   const qs = new URLSearchParams({
     format: "json",
     pageSize: String(pageSize),
-    show: "sku,name,regularPrice,salePrice,onSale,inStoreAvailability,onlineAvailability,url,image,brand,modelNumber",
+    show: SHOW_FIELDS,
     apiKey: process.env.BESTBUY_API_KEY!,
   });
-  // Build URL with raw search term in parentheses (Best Buy API syntax)
-  const url = `${BASE_URL}/products(search=${encodeURIComponent(searchTerm)})?${qs.toString()}`;
+
+  // Best Buy OData filter: search term + laptop category
+  const searchTerm = query.replace(/[()]/g, "").trim();
+  const filter = `search=${encodeURIComponent(searchTerm)}&categoryPath.id=${LAPTOP_CATEGORY_ID}`;
+  const url = `${BASE_URL}/products(${filter})?${qs.toString()}`;
+
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return [];
   const data: BestBuyApiResponse = await res.json();
+  if (data.error) return [];
   return (data.products ?? []).map(mapProduct);
 }
 
@@ -82,7 +91,7 @@ export async function searchBestBuyProducts(
 ): Promise<BestBuyProduct[]> {
   if (!isConfigured()) return [];
 
-  const cacheKey = `bestbuy:v2:${query}:${pageSize}`;
+  const cacheKey = `bestbuy:v3:${query}:${pageSize}`;
   const cached = await cacheGetJson<BestBuyProduct[]>(cacheKey);
   if (cached) return cached;
 
@@ -94,9 +103,7 @@ export async function searchBestBuyProducts(
   return products;
 }
 
-export async function getBestBuyProductBySku(
-  sku: string
-): Promise<BestBuyProduct | null> {
+export async function getBestBuyProductBySku(sku: string): Promise<BestBuyProduct | null> {
   if (!isConfigured()) return null;
 
   const cacheKey = `bestbuy:sku:${sku}`;
@@ -104,7 +111,7 @@ export async function getBestBuyProductBySku(
   if (cached) return cached;
 
   const fetch$ = async () => {
-    const url = `${BASE_URL}/products/${sku}.json?show=sku,name,regularPrice,salePrice,onSale,inStoreAvailability,onlineAvailability,url,image,brand,modelNumber&apiKey=${process.env.BESTBUY_API_KEY}`;
+    const url = `${BASE_URL}/products/${sku}.json?show=${SHOW_FIELDS}&apiKey=${process.env.BESTBUY_API_KEY}`;
     const res = await fetch(url, { cache: "no-store" });
     if (!res.ok) return null;
     const p: BestBuyApiProduct = await res.json();
