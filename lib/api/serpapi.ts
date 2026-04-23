@@ -30,7 +30,7 @@ interface SerpApiResponse {
 }
 
 const CACHE_TTL = 3600;
-const FETCH_TIMEOUT_MS = 6000;
+const API_TIMEOUT_MS = 8000;
 
 const EMPTY: PriceSummary = { results: [], low: null, high: null, average: null };
 
@@ -45,7 +45,7 @@ function parsePrice(raw?: string): number | null {
   return isNaN(parsed) ? null : parsed;
 }
 
-async function doFetch(query: string): Promise<PriceSummary> {
+async function fetchFromApi(query: string): Promise<PriceSummary> {
   const params = new URLSearchParams({
     engine: "google_shopping",
     q: query,
@@ -54,7 +54,6 @@ async function doFetch(query: string): Promise<PriceSummary> {
     gl: "us",
     hl: "en",
   });
-
   const res = await fetch(
     `https://serpapi.com/search.json?${params.toString()}`,
     { cache: "no-store" }
@@ -70,11 +69,7 @@ async function doFetch(query: string): Promise<PriceSummary> {
     link: r.link ?? null,
     thumbnail: r.thumbnail ?? null,
   }));
-
-  const prices = results
-    .map((r) => r.price)
-    .filter((p): p is number => p !== null);
-
+  const prices = results.map((r) => r.price).filter((p): p is number => p !== null);
   return {
     results,
     low: prices.length ? Math.min(...prices) : null,
@@ -88,14 +83,21 @@ async function doFetch(query: string): Promise<PriceSummary> {
 export async function getShoppingPrices(query: string): Promise<PriceSummary> {
   if (!isConfigured()) return EMPTY;
 
-  const cacheKey = `serpapi:v2:${query}`;
-  const cached = await cacheGetJson<PriceSummary>(cacheKey);
+  const cacheKey = `serpapi:v3:${query}`;
+
+  // Race cache lookup against live API call — whichever arrives first wins
+  const [cacheResult, apiResult] = await Promise.allSettled([
+    withTimeout(cacheGetJson<PriceSummary>(cacheKey), 1000, null),
+    withTimeout(fetchFromApi(query), API_TIMEOUT_MS, EMPTY),
+  ]);
+
+  const cached = cacheResult.status === "fulfilled" ? cacheResult.value : null;
   if (cached) return cached;
 
-  const result = await withTimeout(doFetch(query), FETCH_TIMEOUT_MS, EMPTY);
-
-  if (result.results.length > 0) {
-    await cacheSetJson(cacheKey, result, CACHE_TTL);
+  const fresh = apiResult.status === "fulfilled" ? apiResult.value : EMPTY;
+  if (fresh.results.length > 0) {
+    // Fire-and-forget cache write — don't await
+    cacheSetJson(cacheKey, fresh, CACHE_TTL).catch(() => {});
   }
-  return result;
+  return fresh;
 }

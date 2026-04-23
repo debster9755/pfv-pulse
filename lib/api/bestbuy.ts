@@ -25,23 +25,19 @@ interface BestBuyApiProduct {
   onlineAvailability: boolean;
   url: string;
   image: string;
-  manufacturer: string; // Best Buy uses "manufacturer" not "brand"
+  manufacturer: string;
   modelNumber: string;
 }
 
 interface BestBuyApiResponse {
   products?: BestBuyApiProduct[];
-  total?: number;
   error?: { message: string };
 }
 
 const BASE_URL = "https://api.bestbuy.com/v1";
 const CACHE_TTL = 1800;
-const FETCH_TIMEOUT_MS = 6000;
-
-// Best Buy laptop category ID — narrows results to Laptop & Netbooks
+const API_TIMEOUT_MS = 8000;
 const LAPTOP_CATEGORY_ID = "abcat0502000";
-
 const SHOW_FIELDS =
   "sku,name,regularPrice,salePrice,manufacturer,modelNumber,onSale,inStoreAvailability,onlineAvailability,url,image";
 
@@ -65,19 +61,16 @@ function mapProduct(p: BestBuyApiProduct): BestBuyProduct {
   };
 }
 
-async function doSearch(query: string, pageSize: number): Promise<BestBuyProduct[]> {
+async function fetchFromApi(query: string, pageSize: number): Promise<BestBuyProduct[]> {
+  const searchTerm = query.replace(/[()]/g, "").trim();
   const qs = new URLSearchParams({
     format: "json",
     pageSize: String(pageSize),
     show: SHOW_FIELDS,
     apiKey: process.env.BESTBUY_API_KEY!,
   });
-
-  // Best Buy OData filter: search term + laptop category
-  const searchTerm = query.replace(/[()]/g, "").trim();
   const filter = `search=${encodeURIComponent(searchTerm)}&categoryPath.id=${LAPTOP_CATEGORY_ID}`;
   const url = `${BASE_URL}/products(${filter})?${qs.toString()}`;
-
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return [];
   const data: BestBuyApiResponse = await res.json();
@@ -91,24 +84,26 @@ export async function searchBestBuyProducts(
 ): Promise<BestBuyProduct[]> {
   if (!isConfigured()) return [];
 
-  const cacheKey = `bestbuy:v3:${query}:${pageSize}`;
-  const cached = await cacheGetJson<BestBuyProduct[]>(cacheKey);
+  const cacheKey = `bestbuy:v4:${query}:${pageSize}`;
+
+  // Race cache vs live API — concurrent, not sequential
+  const [cacheResult, apiResult] = await Promise.allSettled([
+    withTimeout(cacheGetJson<BestBuyProduct[]>(cacheKey), 1000, null),
+    withTimeout(fetchFromApi(query, pageSize), API_TIMEOUT_MS, []),
+  ]);
+
+  const cached = cacheResult.status === "fulfilled" ? cacheResult.value : null;
   if (cached) return cached;
 
-  const products = await withTimeout(doSearch(query, pageSize), FETCH_TIMEOUT_MS, []);
-
-  if (products.length > 0) {
-    await cacheSetJson(cacheKey, products, CACHE_TTL);
+  const fresh = apiResult.status === "fulfilled" ? apiResult.value : [];
+  if (fresh.length > 0) {
+    cacheSetJson(cacheKey, fresh, CACHE_TTL).catch(() => {});
   }
-  return products;
+  return fresh;
 }
 
 export async function getBestBuyProductBySku(sku: string): Promise<BestBuyProduct | null> {
   if (!isConfigured()) return null;
-
-  const cacheKey = `bestbuy:sku:${sku}`;
-  const cached = await cacheGetJson<BestBuyProduct>(cacheKey);
-  if (cached) return cached;
 
   const fetch$ = async () => {
     const url = `${BASE_URL}/products/${sku}.json?show=${SHOW_FIELDS}&apiKey=${process.env.BESTBUY_API_KEY}`;
@@ -118,7 +113,5 @@ export async function getBestBuyProductBySku(sku: string): Promise<BestBuyProduc
     return mapProduct(p);
   };
 
-  const product = await withTimeout(fetch$(), FETCH_TIMEOUT_MS, null);
-  if (product) await cacheSetJson(cacheKey, product, CACHE_TTL);
-  return product;
+  return withTimeout(fetch$(), API_TIMEOUT_MS, null);
 }
