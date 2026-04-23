@@ -24,12 +24,9 @@ export async function GET(req: NextRequest) {
   try {
     const prices = await prisma.price.findMany({
       where: {
-        product: {
-          OR: [
-            query ? { name: { contains: query, mode: "insensitive" } } : {},
-            asin ? { asin } : {},
-          ],
-        },
+        product: query
+          ? { name: { contains: query, mode: "insensitive" } }
+          : {},
         recordedAt: {
           gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000),
         },
