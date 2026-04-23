@@ -1,0 +1,100 @@
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  brand       String
+  model       String
+  category    String   @default("laptop")
+  asin        String?  @unique
+  sku         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  prices      Price[]
+  benchmarks  Benchmark[]
+  reviews     Review[]
+  salesData   SalesData[]
+
+  @@index([brand])
+  @@index([model])
+}
+
+model Price {
+  id          String   @id @default(cuid())
+  productId   String
+  retailer    String
+  price       Float
+  currency    String   @default("USD")
+  msrp        Float?
+  inStock     Boolean  @default(true)
+  url         String?
+  source      String
+  recordedAt  DateTime @default(now())
+
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([retailer])
+  @@index([recordedAt])
+}
+
+model Benchmark {
+  id              String   @id @default(cuid())
+  productId       String
+  benchmarkName   String
+  score           Float
+  unit            String?
+  testCondition   String?
+  source          String   @default("notebookcheck")
+  recordedAt      DateTime @default(now())
+
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([benchmarkName])
+}
+
+model Review {
+  id              String   @id @default(cuid())
+  productId       String
+  source          String
+  title           String?
+  body            String?
+  rating          Float?
+  sentimentScore  Float?
+  sentimentLabel  String?
+  url             String?
+  reviewedAt      DateTime?
+  scrapedAt       DateTime @default(now())
+
+  product         Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([source])
+  @@index([scrapedAt])
+}
+
+model SalesData {
+  id          String   @id @default(cuid())
+  productId   String
+  period      DateTime
+  unitsSold   Int
+  revenue     Float
+  region      String?
+  channel     String?
+  source      String   @default("csv_upload")
+  uploadedAt  DateTime @default(now())
+
+  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([period])
+}
