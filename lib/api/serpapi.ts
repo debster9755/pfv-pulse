@@ -33,8 +33,12 @@ const CACHE_TTL = 3600;
 const API_TIMEOUT_MS = 8000;
 const EMPTY: PriceSummary = { results: [], low: null, high: null, average: null };
 
+function getKey(): string {
+  return (process.env.SERPAPI_KEY ?? "").trim();
+}
+
 function isConfigured(): boolean {
-  return Boolean(process.env.SERPAPI_KEY);
+  return Boolean(getKey());
 }
 
 function parsePrice(raw?: string): number | null {
@@ -48,7 +52,7 @@ async function fetchFromApi(query: string): Promise<PriceSummary> {
   const params = new URLSearchParams({
     engine: "google_shopping",
     q: query,
-    api_key: process.env.SERPAPI_KEY!,
+    api_key: getKey(),
     num: "10",
     gl: "us",
     hl: "en",

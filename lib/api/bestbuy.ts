@@ -41,8 +41,12 @@ const LAPTOP_CATEGORY_ID = "abcat0502000";
 const SHOW_FIELDS =
   "sku,name,regularPrice,salePrice,manufacturer,modelNumber,onSale,inStoreAvailability,onlineAvailability,url,image";
 
+function getKey(): string {
+  return (process.env.BESTBUY_API_KEY ?? "").trim();
+}
+
 function isConfigured(): boolean {
-  return Boolean(process.env.BESTBUY_API_KEY);
+  return Boolean(getKey());
 }
 
 function mapProduct(p: BestBuyApiProduct): BestBuyProduct {
@@ -67,7 +71,7 @@ async function fetchFromApi(query: string, pageSize: number): Promise<BestBuyPro
     format: "json",
     pageSize: String(pageSize),
     show: SHOW_FIELDS,
-    apiKey: process.env.BESTBUY_API_KEY!,
+    apiKey: getKey(),
   });
   // %26 encodes & so WHATWG URL parsers don't split the OData filter
   const filter = `search=${encodeURIComponent(searchTerm)}%26categoryPath.id=${LAPTOP_CATEGORY_ID}`;
