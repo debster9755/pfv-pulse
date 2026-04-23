@@ -69,7 +69,8 @@ async function fetchFromApi(query: string, pageSize: number): Promise<BestBuyPro
     show: SHOW_FIELDS,
     apiKey: process.env.BESTBUY_API_KEY!,
   });
-  const filter = `search=${encodeURIComponent(searchTerm)}&categoryPath.id=${LAPTOP_CATEGORY_ID}`;
+  // Encode & as %26 so WHATWG URL parsers don't split the OData filter at the &
+  const filter = `search=${encodeURIComponent(searchTerm)}%26categoryPath.id=${LAPTOP_CATEGORY_ID}`;
   const url = `${BASE_URL}/products(${filter})?${qs.toString()}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) return [];
