@@ -9,6 +9,8 @@
 [![Redis](https://img.shields.io/badge/Redis-Upstash-DC382D?logo=redis)](https://upstash.com)
 [![Playwright](https://img.shields.io/badge/Playwright-Scraper-45ba4b?logo=playwright)](https://playwright.dev)
 
+> 🎯 **[View Pitch Deck →](https://pfv-pulse.vercel.app/presentation/index.html)** — Interactive presentation covering architecture, data flow, business benefits & live demo.
+
 ---
 
 ## Table of Contents
