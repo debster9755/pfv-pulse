@@ -1,56 +1,60 @@
 import { NextResponse } from "next/server";
+import { searchBestBuyProducts } from "@/lib/api/bestbuy";
+import { withTimeout } from "@/lib/timeout";
 
 export const maxDuration = 15;
 
 export async function GET() {
   const key = process.env.BESTBUY_API_KEY ?? "";
-  const serpKey = process.env.SERPAPI_KEY ?? "";
 
-  const bbKeyPresent = key.length > 0;
-  const serpKeyPresent = serpKey.length > 0;
+  // ── Test 1: Raw fetch (same URL as the wrapper) ───────────────────────────
+  const searchTerm = "HP Omen";
+  const SHOW_FIELDS = "sku,name,regularPrice,salePrice,manufacturer,modelNumber,onSale,inStoreAvailability,onlineAvailability,url,image";
+  const qs = new URLSearchParams({
+    format: "json",
+    pageSize: "8",
+    show: SHOW_FIELDS,
+    apiKey: key,
+  });
+  const filter = `search=${encodeURIComponent(searchTerm)}%26categoryPath.id=abcat0502000`;
+  const url = `https://api.bestbuy.com/v1/products(${filter})?${qs.toString()}`;
 
-  const testUrl = `https://api.bestbuy.com/v1/products(search=HP%20Omen%26categoryPath.id=abcat0502000)?format=json&pageSize=3&show=sku,name,regularPrice&apiKey=${key}`;
-
-  let bbResult: unknown = null;
-  let bbStatus = 0;
-  let bbError: string | null = null;
-  let resolvedUrl = "";
+  let rawCount = 0;
+  let rawStatus = 0;
+  let rawError: string | null = null;
 
   try {
-    const r = await fetch(testUrl, { cache: "no-store" });
-    bbStatus = r.status;
-    resolvedUrl = r.url; // final URL after any redirects
-    bbResult = await r.json();
+    const r = await fetch(url, { cache: "no-store" });
+    rawStatus = r.status;
+    const d = await r.json() as { products?: unknown[]; error?: unknown };
+    rawCount = (d.products ?? []).length;
+    if (d.error) rawError = JSON.stringify(d.error);
   } catch (e) {
-    bbError = String(e);
+    rawError = String(e);
   }
 
-  let serpResult: unknown = null;
-  let serpStatus = 0;
+  // ── Test 2: Via withTimeout wrapper ───────────────────────────────────────
+  let withTimeoutCount = 0;
   try {
-    const sp = new URLSearchParams({
-      engine: "google_shopping",
-      q: "HP Omen laptop",
-      api_key: serpKey,
-      num: "3",
-    });
-    const sr = await fetch(`https://serpapi.com/search.json?${sp}`, { cache: "no-store" });
-    serpStatus = sr.status;
-    const sd = await sr.json() as { shopping_results?: unknown[]; error?: string };
-    serpResult = { count: (sd.shopping_results ?? []).length, error: sd.error };
-  } catch (e) {
-    serpResult = { error: String(e) };
-  }
+    const r2 = await fetch(url, { cache: "no-store" });
+    const d2 = await r2.json() as { products?: unknown[] };
+    withTimeoutCount = (d2.products ?? []).length;
+  } catch { /* */ }
+
+  const withTimeoutWrapped = await withTimeout(
+    fetch(url, { cache: "no-store" }).then(r => r.json()).then((d: { products?: unknown[] }) => (d.products ?? []).length),
+    8000,
+    -1
+  );
+
+  // ── Test 3: Full searchBestBuyProducts call ───────────────────────────────
+  const products = await searchBestBuyProducts("HP Omen", 8);
 
   return NextResponse.json({
-    env: {
-      bbKeyPresent,
-      bbKeyPreview: key.slice(0, 6) + "...",
-      serpKeyPresent,
-      serpKeyPreview: serpKey.slice(0, 8) + "...",
-      node: process.version,
-    },
-    bestbuy: { status: bbStatus, resolvedUrl, error: bbError, result: bbResult },
-    serpapi: { status: serpStatus, result: serpResult },
+    url: url.replace(key, "KEY_HIDDEN"),
+    rawFetch: { status: rawStatus, count: rawCount, error: rawError },
+    withTimeout: withTimeoutWrapped,
+    searchBestBuyProducts: { count: products.length, first: products[0]?.name ?? null },
+    env: { bbKeyLength: key.length, bbKeyPreview: key.slice(0, 6) },
   });
 }
